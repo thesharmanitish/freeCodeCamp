@@ -12,10 +12,14 @@ import { Observable } from 'rx';
 import isNumeric from 'validator/lib/isNumeric';
 import isURL from 'validator/lib/isURL';
 
+import jwt from 'jsonwebtoken';
+import { jwtSecret } from '../../../../config/secrets';
+
 import { environment, deploymentEnv } from '../../../../config/env.json';
 import {
   fixCompletedChallengeItem,
-  fixPartiallyCompletedChallengeItem
+  fixPartiallyCompletedChallengeItem,
+  fixSavedChallengeItem
 } from '../../common/utils';
 import { getChallenges } from '../utils/get-curriculum';
 import { ifNoUserSend } from '../utils/middleware';
@@ -61,6 +65,13 @@ export default async function bootChallenge(app, done) {
     backendChallengeCompleted
   );
 
+  api.post(
+    '/save-challenge',
+    send200toNonUser,
+    isValidChallengeCompletion,
+    saveChallenge
+  );
+
   router.get('/challenges/current-challenge', redirectToCurrentChallenge);
 
   const coderoadChallengeCompleted = createCoderoadChallengeCompleted(app);
@@ -84,6 +95,33 @@ const multiFileCertProjectIds = getChallenges()
   .filter(challenge => challenge.challengeType === 14)
   .map(challenge => challenge.id);
 
+const savableChallenges = getChallenges()
+  .filter(challenge => challenge.challengeType === 14)
+  .map(challenge => challenge.id);
+
+function buildNewSavedChallenges({
+  user,
+  challengeId,
+  completedDate = Date.now(),
+  files
+}) {
+  const { savedChallenges } = user;
+  const challengeToSave = {
+    id: challengeId,
+    lastSavedDate: completedDate,
+    files: files?.map(file =>
+      pick(file, ['contents', 'key', 'name', 'ext', 'history'])
+    )
+  };
+
+  const newSavedChallenges = uniqBy(
+    [challengeToSave, ...savedChallenges.map(fixSavedChallengeItem)],
+    'id'
+  );
+
+  return newSavedChallenges;
+}
+
 export function buildUserUpdate(
   user,
   challengeId,
@@ -98,7 +136,7 @@ export function buildUserUpdate(
   ) {
     completedChallenge = {
       ..._completedChallenge,
-      files: files.map(file =>
+      files: files?.map(file =>
         pick(file, ['contents', 'key', 'index', 'name', 'path', 'ext'])
       )
     };
@@ -130,13 +168,34 @@ export function buildUserUpdate(
     };
   }
 
-  updateData.$set = {
-    completedChallenges: uniqBy(
-      [finalChallenge, ...completedChallenges.map(fixCompletedChallengeItem)],
-      'id'
-    )
-  };
+  let newSavedChallenges;
 
+  if (savableChallenges.includes(challengeId)) {
+    newSavedChallenges = buildNewSavedChallenges({
+      user,
+      challengeId,
+      completedDate,
+      files
+    });
+
+    // if savableChallenge, update saved array when submitting
+    updateData.$set = {
+      completedChallenges: uniqBy(
+        [finalChallenge, ...completedChallenges.map(fixCompletedChallengeItem)],
+        'id'
+      ),
+      savedChallenges: newSavedChallenges
+    };
+  } else {
+    updateData.$set = {
+      completedChallenges: uniqBy(
+        [finalChallenge, ...completedChallenges.map(fixCompletedChallengeItem)],
+        'id'
+      )
+    };
+  }
+
+  // remove from partiallyCompleted on submit
   updateData.$pull = {
     partiallyCompletedChallenges: { id: challengeId }
   };
@@ -154,7 +213,8 @@ export function buildUserUpdate(
   return {
     alreadyCompleted,
     updateData,
-    completedDate: finalChallenge.completedDate
+    completedDate: finalChallenge.completedDate,
+    savedChallenges: newSavedChallenges
   };
 }
 
@@ -211,6 +271,7 @@ export function isValidChallengeCompletion(req, res, next) {
     body: { id, challengeType, solution }
   } = req;
 
+  // ToDO: Validate other things (challengeFiles, etc)
   const isValidChallengeCompletionErrorMsg = {
     type: 'error',
     message: 'That does not appear to be a valid challenge submission.'
@@ -245,6 +306,7 @@ export function modernChallengeCompleted(req, res, next) {
         completedDate
       };
 
+      // if multifile cert project
       if (challengeType === 14) {
         completedChallenge.isManuallyApproved = false;
       }
@@ -258,11 +320,12 @@ export function modernChallengeCompleted(req, res, next) {
         completedChallenge.challengeType = challengeType;
       }
 
-      const { alreadyCompleted, updateData } = buildUserUpdate(
+      const { alreadyCompleted, savedChallenges, updateData } = buildUserUpdate(
         user,
         id,
         completedChallenge
       );
+
       const points = alreadyCompleted ? user.points : user.points + 1;
       const updatePromise = new Promise((resolve, reject) =>
         user.updateAttributes(updateData, err => {
@@ -276,7 +339,8 @@ export function modernChallengeCompleted(req, res, next) {
         return res.json({
           points,
           alreadyCompleted,
-          completedDate
+          completedDate,
+          savedChallenges
         });
       });
     })
@@ -386,6 +450,45 @@ function backendChallengeCompleted(req, res, next) {
     .subscribe(() => {}, next);
 }
 
+function saveChallenge(req, res, next) {
+  const user = req.user;
+  const { id: challengeId, files = [] } = req.body;
+
+  if (!savableChallenges.includes(challengeId)) {
+    return res.status(403).send('That challenge type is not savable');
+  }
+
+  const newSavedChallenges = buildNewSavedChallenges({
+    user,
+    challengeId,
+    completedDate: Date.now(),
+    files
+  });
+
+  return user
+    .getSavedChallenges$()
+    .flatMap(() => {
+      const updateData = {};
+      updateData.$set = {
+        savedChallenges: newSavedChallenges
+      };
+      const updatePromise = new Promise((resolve, reject) =>
+        user.updateAttributes(updateData, err => {
+          if (err) {
+            return reject(err);
+          }
+          return resolve();
+        })
+      );
+      return Observable.fromPromise(updatePromise).doOnNext(() => {
+        return res.json({
+          savedChallenges: newSavedChallenges
+        });
+      });
+    })
+    .subscribe(() => {}, next);
+}
+
 const codeRoadChallenges = getChallenges().filter(
   ({ challengeType }) => challengeType === 12 || challengeType === 13
 );
@@ -399,13 +502,21 @@ function createCoderoadChallengeCompleted(app) {
   const { UserToken, User } = app.models;
 
   return async function coderoadChallengeCompleted(req, res) {
-    const { 'coderoad-user-token': userToken } = req.headers;
+    const { 'coderoad-user-token': encodedUserToken } = req.headers;
     const { tutorialId } = req.body;
 
     if (!tutorialId) return res.send(`'tutorialId' not found in request body`);
 
-    if (!userToken)
+    if (!encodedUserToken)
       return res.send(`'coderoad-user-token' not found in request headers`);
+
+    let userToken;
+
+    try {
+      userToken = jwt.verify(encodedUserToken, jwtSecret)?.userToken;
+    } catch {
+      return res.send(`invalid user token`);
+    }
 
     const tutorialRepo = tutorialId?.split(':')[0];
     const tutorialOrg = tutorialRepo?.split('/')?.[0];

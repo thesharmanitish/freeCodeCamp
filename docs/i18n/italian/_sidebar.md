@@ -16,11 +16,13 @@
   - [Lavora sui test Cypress ](how-to-add-cypress-tests.md)
   - [Lavorare sulle sfide video](how-to-help-with-video-challenges.md)
   - [Lavorare sul tema della documentazione](how-to-work-on-the-docs-theme.md)
+  - [Work on the component library](how-to-work-on-the-component-library.md)
 - **Guide aggiuntive**
   - [Testare traduzioni in locale](how-to-test-translations-locally.md)
   - [Capire la struttura dei file del curriculum](curriculum-file-structure.md)
   - [Fai il debug delle email in uscita localmente](how-to-catch-outgoing-emails-locally.md)
   - [Settare freeCodeCamp su Windows (WSL)](how-to-setup-wsl.md)
+  - [User Token Workflow](user-token-workflow.md)
 
 ---
 

@@ -82,7 +82,7 @@ interface EditorProps {
   updateFile: (object: {
     fileKey: FileKey;
     editorValue: string;
-    editableRegionBoundaries: number[] | null;
+    editableRegionBoundaries?: number[];
   }) => void;
   usesMultifileEditor: boolean;
 }
@@ -164,7 +164,8 @@ const defineMonacoThemes = (
     base: 'vs-dark',
     inherit: true,
     colors: {
-      'editor.background': '#2a2a40'
+      'editor.background': '#2a2a40',
+      'editor.lineHighlightBorder': '#0e4470'
     },
     rules: [
       { token: 'delimiter.js', foreground: lightBlueColor },
@@ -178,7 +179,8 @@ const defineMonacoThemes = (
     inherit: true,
     // TODO: Use actual color from style-guide
     colors: {
-      'editor.background': options.usesMultifileEditor ? '#eee' : '#fff'
+      'editor.background': options.usesMultifileEditor ? '#eee' : '#fff',
+      'editor.lineHighlightBorder': '#cee8fc'
     },
     rules: [{ token: 'identifier.js', foreground: darkBlueColor }]
   });
@@ -418,7 +420,7 @@ const Editor = (props: EditorProps): JSX.Element => {
       id: 'toggle-aria-roledescription',
       label: 'Toggle aria-roledescription',
       keybindings: [
-        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KEY_J
+        monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KEY_R
       ],
       run: toggleAriaRoledescription
     });
@@ -630,10 +632,12 @@ const Editor = (props: EditorProps): JSX.Element => {
     // has changed or if content is dragged between regions)
 
     const coveringRange = getLinesCoveringEditableRegion();
-    const editableRegionBoundaries = coveringRange && [
-      coveringRange.startLineNumber - 1,
-      coveringRange.endLineNumber + 1
-    ];
+    const editableRegionBoundaries =
+      (coveringRange && [
+        coveringRange.startLineNumber - 1,
+        coveringRange.endLineNumber + 1
+      ]) ??
+      undefined;
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     if (player.current.sampler?.loaded && player.current.shouldPlay) {
@@ -1082,7 +1086,7 @@ const Editor = (props: EditorProps): JSX.Element => {
           editorDidMount={editorDidMount}
           editorWillMount={editorWillMount}
           onChange={onChange}
-          options={options}
+          options={{ ...options, folding: !hasEditableRegion() }}
           theme={editorTheme}
         />
       </span>
